@@ -1,0 +1,153 @@
+package service_test
+
+import (
+	"context"
+	core "github.com/thellmwhisperer/la-roca/internal/provider/service"
+
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/thellmwhisperer/la-roca/plugins/playground/internal/provider"
+	"github.com/thellmwhisperer/la-roca/plugins/playground/internal/service"
+)
+
+type testPaths struct{ db, backups, cache, data string }
+
+// openService opens the database without initializing it: it is what the init
+// tests need, since they measure precisely what that first pass does.
+func openService(t *testing.T) (*service.Service, string) {
+	t.Helper()
+	paths := freshPaths(t)
+	return serviceOn(t, paths), paths.db
+}
+
+func freshPaths(t *testing.T) testPaths {
+	t.Helper()
+	dir := t.TempDir()
+	return testPaths{
+		db:      filepath.Join(dir, "roca.db"),
+		backups: filepath.Join(dir, "backups"),
+		cache:   filepath.Join(dir, "cache"),
+		data:    dir,
+	}
+}
+
+// serviceWithPaths opens an already initialized installation.
+func serviceWithPaths(t *testing.T) (*service.Service, testPaths) {
+	t.Helper()
+	paths := freshPaths(t)
+	svc := serviceOn(t, paths)
+	if _, err := svc.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	return svc, paths
+}
+
+func serviceOn(t *testing.T, paths testPaths, different ...func(*service.Options)) *service.Service {
+	t.Helper()
+	options := baseOptions(paths)
+	for _, apply := range different {
+		apply(&options)
+	}
+	svc, err := service.Open(options)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { svc.Close() })
+	return svc
+}
+
+func baseOptions(paths testPaths) service.Options {
+	return service.Options{Options: core.Options{
+		DBPath:    paths.db,
+		BackupDir: paths.backups,
+		DataDir:   paths.data,
+		Version:   "0.0.0-test",
+		Commit:    "0123456789abcdef",
+	}}
+}
+
+func seededService(t *testing.T) *service.Service {
+	t.Helper()
+	svc, _ := serviceWithPaths(t)
+	seedTheUsualMemories(t, svc)
+	return svc
+}
+
+// seededServiceWith is the same seeded installation with a model cascade
+// plugged in. The model tests need it. A second cascade is the installation
+// that splits the two inferences: the rows go to it and nowhere else.
+func seededServiceWith(t *testing.T, providers provider.Cascade,
+	interpreters ...provider.Cascade) *service.Service {
+	t.Helper()
+	svc := initialized(t, freshPaths(t), func(options *service.Options) {
+		options.Providers = providers
+		if len(interpreters) > 0 {
+			options.Interpreters = interpreters[0]
+		}
+	})
+	seedTheUsualMemories(t, svc)
+	return svc
+}
+
+// initialized opens a toy installation and runs Init over it. Every constructor
+// in this suite goes through it and says what makes its own installation
+// different in the one function it passes, instead of carrying another copy of
+// the same Options literal.
+func initialized(t *testing.T, paths testPaths,
+	different ...func(*service.Options)) *service.Service {
+	t.Helper()
+	svc := serviceOn(t, paths, different...)
+	if _, err := svc.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	return svc
+}
+
+// readOnlyService is an already initialized installation reopened in read-only
+// mode: the database exists and has its schema, and the service refuses every
+// write over it before touching the disk.
+func readOnlyService(t *testing.T) *service.Service {
+	t.Helper()
+	paths := freshPaths(t)
+	if _, err := serviceOn(t, paths).Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	return serviceOn(t, paths, func(o *service.Options) { o.ReadOnly = true })
+}
+
+func seedTheUsualMemories(t *testing.T, svc *service.Service) {
+	t.Helper()
+	seed(t, svc, "project", "the team hates long dashes in the generated text")
+	seed(t, svc, "feedback", "layer anchor for the layer constraint")
+	seed(t, svc, "project", "a very long memory: "+strings.Repeat("filler ", 800))
+}
+
+func seed(t *testing.T, svc *service.Service, layer, content string) {
+	t.Helper()
+	_, err := svc.DB().SQL().Exec(
+		"INSERT INTO memories (layer, content, origin) VALUES (?, ?, 'agent')", layer, content)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+}
+
+func memoriesInTheDatabase(t *testing.T, svc *service.Service) int {
+	t.Helper()
+	var n int
+	if err := svc.DB().SQL().QueryRow(
+		"SELECT COUNT(*) FROM memories WHERE layer = 'feedback'").Scan(&n); err != nil {
+		t.Fatalf("COUNT: %v", err)
+	}
+	return n
+}
+
+func firstRowText(t *testing.T, res service.QueryResult) string {
+	t.Helper()
+	if len(res.Rows) == 0 {
+		t.Fatal("there are no rows")
+	}
+	text, _ := res.Rows[0]["text"].(string)
+	return text
+}
