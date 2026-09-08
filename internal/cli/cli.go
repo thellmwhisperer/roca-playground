@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/spf13/cobra"
@@ -33,6 +34,12 @@ type cliEnv struct {
 }
 
 func Execute(build Build, args []string, in io.Reader, out, errOut io.Writer) (int, error) {
+	transport := len(args) > 0 && args[0] == "--transport"
+	var diagnostics bytes.Buffer
+	target := errOut
+	if transport {
+		args, errOut = args[1:], &diagnostics
+	}
 	env := &cliEnv{build: build, out: out, errOut: errOut}
 	root := rootCommand(env)
 	root.SetIn(in)
@@ -40,6 +47,23 @@ func Execute(build Build, args []string, in io.Reader, out, errOut io.Writer) (i
 	root.SetErr(errOut)
 	root.SetArgs(args)
 	err := root.Execute()
+	if transport {
+		if err != nil {
+			fmt.Fprintln(&diagnostics, err)
+			env.code = ExitError
+		}
+		var cleaned string
+		if env.auditQuery != nil {
+			cleaned = env.auditQuery.CleanedSQL
+			env.auditQuery.Rows, env.auditQuery.Columns = nil, nil
+		}
+		wire := struct {
+			Stderr     string               `json:"stderr"`
+			Query      *service.QueryResult `json:"query,omitempty"`
+			CleanedSQL string               `json:"cleaned_sql,omitempty"`
+		}{diagnostics.String(), env.auditQuery, cleaned}
+		return env.code, json.NewEncoder(target).Encode(wire)
+	}
 	if err != nil {
 		return 1, err
 	}

@@ -3,6 +3,8 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/thellmwhisperer/la-roca/internal/distribution/rocacorpus"
+	"github.com/thellmwhisperer/la-roca/internal/distribution/rocaops"
 	core "github.com/thellmwhisperer/la-roca/internal/provider/service"
 	"github.com/thellmwhisperer/la-roca/plugins/playground/internal/service"
 	"os"
@@ -166,19 +168,12 @@ func TestDoctorReportsTheConfiguredInterpretationProvider(t *testing.T) {
 	build := Build{Version: "test", Commit: "abc123"}
 	var output strings.Builder
 	env := &cliEnv{build: build, dbPath: filepath.Join(home, ".roca", "roca.db"), out: &output, errOut: &output}
-	svc, err := service.Open(service.Options{Options: core.Options{DBPath: env.dbPath}})
+	initializeProviderFixture(t, home, build)
+	svc, err := env.openService()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer svc.Close()
-	if _, err := svc.Init(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	svc.Close()
-	svc, err = env.openService()
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	defer svc.Close()
 	report, err := svc.Doctor(t.Context())
 	if err != nil {
@@ -199,5 +194,50 @@ func TestDoctorReportsTheConfiguredInterpretationProvider(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor does not report the interpretation decision (%q):\n%s", want, out)
 		}
+	}
+}
+
+func initializeProviderFixture(t *testing.T, home string, build Build) {
+	t.Helper()
+	root := filepath.Join(home, ".roca", "plugins")
+	if _, err := rocacorpus.Ensure(root, filepath.Join(home, ".local", "bin"), build.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rocaops.Ensure(root, filepath.Join(home, ".local", "bin"), build.Version); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := service.Open(service.Options{Options: core.Options{DBPath: filepath.Join(home, ".roca", "roca.db")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Init(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	svc.Close()
+}
+
+func TestTransportCarriesRowFreeAuditBesideJSONOutput(t *testing.T) {
+	home := isolatedLoginHome(t)
+	build := Build{Version: "test"}
+	initializeProviderFixture(t, home, build)
+	writeCommandProviderConfig(t, home, "mycorp", "mycorp-7b", true)
+	var out, diagnostics strings.Builder
+	code, err := Execute(build, []string{"--transport", "playground", "synthetic question", "--json"}, strings.NewReader(""), &out, &diagnostics)
+	if code != 0 || err != nil {
+		t.Fatalf("code=%d err=%v diagnostics=%s output=%s", code, err, diagnostics.String(), out.String())
+	}
+	var result service.QueryResult
+	if err := json.Unmarshal([]byte(out.String()), &result); err != nil {
+		t.Fatal(err)
+	}
+	var audit struct {
+		Query      *service.QueryResult
+		CleanedSQL string `json:"cleaned_sql"`
+	}
+	if err := json.Unmarshal([]byte(diagnostics.String()), &audit); err != nil {
+		t.Fatal(err)
+	}
+	if result.RowCount != 1 || audit.Query == nil || audit.Query.Engine != "mycorp" || audit.CleanedSQL == "" || audit.CleanedSQL != "SELECT 1" || len(audit.Query.Rows) != 0 || len(audit.Query.Columns) != 0 {
+		t.Fatalf("result=%+v audit=%s", result, diagnostics.String())
 	}
 }
