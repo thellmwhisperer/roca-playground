@@ -31,7 +31,11 @@ internal namespace so it can reuse the same read-only SQLite engine and wire
 formats without copying them. It is distributed as an executable, not a Go
 library. Provider tests use synthetic homes and local fake model servers.
 
-Core delegation uses `--transport` before the verb: stdout remains the live
-command output, while stderr carries one JSON envelope with `stderr`, a row-free
-`query`, and `cleaned_sql`. Core owns durable auditing; the plugin does not append
-a second call record. Direct plugin commands keep their ordinary streams.
+The plugin supports an opt-in delegation transport: pass `--transport` as its
+first argument, for example `roca-playground --transport playground "question"`.
+Stdout remains the live command output; stderr carries one JSON envelope with
+`stderr` diagnostics, an optional `query` with rows and columns removed, and
+`cleaned_sql` when nonempty. Failures retain a nonzero exit status; errors before
+a query result is recorded omit `query`. Core owns durable auditing; the plugin
+does not append a second call record. Calls without `--transport` keep their
+ordinary streams.
