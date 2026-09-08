@@ -30,3 +30,8 @@ changes, use `make check CORE_DIR=<core-checkout>`. The module keeps La Roca's
 internal namespace so it can reuse the same read-only SQLite engine and wire
 formats without copying them. It is distributed as an executable, not a Go
 library. Provider tests use synthetic homes and local fake model servers.
+
+Core delegation uses `--transport` before the verb: stdout remains the live
+command output, while stderr carries one JSON envelope with `stderr`, a row-free
+`query`, and `cleaned_sql`. Core owns durable auditing; the plugin does not append
+a second call record. Direct plugin commands keep their ordinary streams.

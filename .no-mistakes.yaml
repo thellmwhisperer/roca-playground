@@ -1,0 +1,3 @@
+commands:
+  test: make check
+  lint: make prepare && go vet -modfile=.tmp/build.mod ./...
